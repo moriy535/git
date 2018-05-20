@@ -20,6 +20,7 @@ static const char * const git_stash_helper_usage[] = {
 	N_("git stash--helper ( pop | apply ) [--index] [-q|--quiet] [<stash>]"),
 	N_("git stash--helper branch <branchname> [<stash>]"),
 	N_("git stash--helper clear"),
+	N_("git stash--helper store [-m|--message <message>] [-q|--quiet] <commit>"),
 	NULL
 };
 
@@ -55,6 +56,11 @@ static const char * const git_stash_helper_branch_usage[] = {
 
 static const char * const git_stash_helper_clear_usage[] = {
 	N_("git stash--helper clear"),
+	NULL
+};
+
+static const char * const git_stash_helper_store_usage[] = {
+	N_("git stash--helper store [-m|--message <message>] [-q|--quiet] <commit>"),
 	NULL
 };
 
@@ -719,6 +725,46 @@ static int show_stash(int argc, const char **argv, const char *prefix)
 	return 0;
 }
 
+static int store_stash(int argc, const char **argv, const char *prefix)
+{
+	struct object_id obj;
+	int ret = 0;
+	const char *stash_msg = NULL;
+	const char *w_commit = NULL;
+	struct option options[] = {
+		OPT__QUIET(&quiet, N_("be quiet, only report errors")),
+		OPT_STRING('m', "message", &stash_msg, "message", N_("stash message")),
+		OPT_END()
+	};
+
+	argc = parse_options(argc, argv, prefix, options,
+			     git_stash_helper_store_usage,
+			     PARSE_OPT_KEEP_UNKNOWN);
+
+	if (argc != 1) {
+		fprintf(stderr, _("\"git stash--helper store\" requires one <commit> argument\n"));
+		return -1;
+	}
+
+	w_commit = argv[0];
+
+	if (!stash_msg)
+		stash_msg  = xstrdup("Created via \"git stash--helper store\".");
+
+	ret = get_oid(w_commit, &obj);
+	if (!ret) {
+		ret = update_ref(stash_msg, ref_stash, &obj, NULL,
+				 REF_FORCE_CREATE_REFLOG,
+				 quiet ? UPDATE_REFS_QUIET_ON_ERR :
+				 UPDATE_REFS_MSG_ON_ERR);
+	}
+
+	if (ret && !quiet)
+		fprintf_ln(stderr, _("Cannot update %s with %s"), ref_stash, w_commit);
+
+	return ret;
+}
+
 int cmd_stash__helper(int argc, const char **argv, const char *prefix)
 {
 	pid_t pid = getpid();
@@ -753,6 +799,8 @@ int cmd_stash__helper(int argc, const char **argv, const char *prefix)
 		return !!list_stash(argc, argv, prefix);
 	else if (!strcmp(argv[0], "show"))
 		return !!show_stash(argc, argv, prefix);
+	else if (!strcmp(argv[0], "store"))
+		return !!store_stash(argc, argv, prefix);
 
 	usage_msg_opt(xstrfmt(_("unknown subcommand: %s"), argv[0]),
 		      git_stash_helper_usage, options);
