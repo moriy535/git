@@ -384,8 +384,6 @@ static int get_short_oid(const char *name, int len, struct object_id *oid,
 		return -1;
 
 	if (HAS_MULTI_BITS(flags & GET_OID_DISAMBIGUATORS)) {
-		if (flags & GET_OID_GENTLY)
-			return -1;
 		die("BUG: multiple get_short_oid disambiguator flags");
 	}
 
@@ -407,8 +405,6 @@ static int get_short_oid(const char *name, int len, struct object_id *oid,
 	status = finish_object_disambiguation(&ds, oid);
 
 	if (!quietly && (status == SHORT_NAME_AMBIGUOUS)) {
-		if (flags & GET_OID_GENTLY)
-			return -1;
 		error(_("short SHA1 %s is ambiguous"), ds.hex_pfx);
 
 		/*
@@ -749,6 +745,7 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 		timestamp_t at_time;
 		timestamp_t co_time;
 		int co_tz, co_cnt;
+		int ret;
 
 		/* Is it asking for N-th entry, or approxidate? */
 		for (i = nth = 0; 0 <= nth && i < reflog_len; i++) {
@@ -773,8 +770,13 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 				return -1;
 			}
 		}
-		if (read_ref_at(real_ref, flags, at_time, nth, oid, NULL,
-				&co_time, &co_tz, &co_cnt)) {
+
+		ret = read_ref_at(real_ref, flags, at_time, nth, oid, NULL,
+				&co_time, &co_tz, &co_cnt);
+		if (ret == -1) {
+			return -1;
+		}
+		if (ret) {
 			if (!len) {
 				if (starts_with(real_ref, "refs/heads/")) {
 					str = real_ref + 11;
@@ -792,8 +794,6 @@ static int get_oid_basic(const char *str, int len, struct object_id *oid,
 						show_date(co_time, co_tz, DATE_MODE(RFC2822)));
 				}
 			} else {
-				if (flags & GET_OID_GENTLY)
-					return -1;
 				if (flags & GET_OID_QUIETLY) {
 					exit(128);
 				}
@@ -1546,7 +1546,7 @@ static int diagnose_invalid_index_path(int stage,
 	if (pos < active_nr) {
 		ce = active_cache[pos];
 		if (ce_namelen(ce) == namelen &&
-			!memcmp(ce->name, filename, namelen)) {
+		    !memcmp(ce->name, filename, namelen)) {
 			if (gently)
 				return -1;
 			die("Path '%s' is in the index, but not at stage %d.\n"
@@ -1592,31 +1592,31 @@ static int diagnose_invalid_index_path(int stage,
 	return 0;
 }
 
-static int resolve_relative_path_gently(const char *rel, char **path, int gently)
+static const char *resolve_error = "dummy";
+
+static char *resolve_relative_path_gently(const char *rel, int gently)
 {
 	if (!starts_with(rel, "./") && !starts_with(rel, "../")) {
-		return 0;
+		return NULL;
 	}
 
 	if (!is_inside_work_tree()) {
 		if (gently) {
-			return -1;
+			return (char*) resolve_error;
 		}
 		die("relative path syntax can't be used outside working tree.");
 	}
 
 	if (gently) {
-		*path = prefix_path_gently(startup_info->prefix,
+		return prefix_path_gently(startup_info->prefix,
 			   startup_info->prefix ? strlen(startup_info->prefix) : 0,
 			   NULL, rel);
-	} else {
-		/* die() inside prefix_path() if resolved path is outside worktree */
-		*path = prefix_path(startup_info->prefix,
-			startup_info->prefix ? strlen(startup_info->prefix) : 0,
-			rel);
 	}
 
-	return 0;
+	/* die() inside prefix_path() if resolved path is outside worktree */
+	return prefix_path(startup_info->prefix,
+		startup_info->prefix ? strlen(startup_info->prefix) : 0,
+		rel);
 }
 
 static int get_oid_with_context_1(const char *name,
@@ -1666,8 +1666,8 @@ static int get_oid_with_context_1(const char *name,
 			stage = name[1] - '0';
 			cp = name + 3;
 		}
-		if (resolve_relative_path_gently(cp, &new_path,
-			!!(flags & GET_OID_GENTLY))) {
+		new_path = resolve_relative_path_gently(cp, flags & GET_OID_GENTLY);
+		if (new_path == resolve_error) {
 			return -1;
 		}
 		if (!new_path) {
@@ -1700,7 +1700,7 @@ static int get_oid_with_context_1(const char *name,
 		}
 		if (only_to_die && name[1] && name[1] != '/' &&
 			diagnose_invalid_index_path(stage, prefix, cp,
-				!!(flags & GET_OID_GENTLY)))
+				flags & GET_OID_GENTLY))
 			return -1;
 
 		free(new_path);
@@ -1726,8 +1726,9 @@ static int get_oid_with_context_1(const char *name,
 			const char *filename = cp+1;
 			char *new_filename = NULL;
 
-			if (resolve_relative_path_gently(filename, &new_filename,
-				!!(flags & GET_OID_GENTLY)))
+			new_filename = resolve_relative_path_gently(filename,
+				flags & GET_OID_GENTLY);
+			if (new_filename == resolve_error)
 				return -1;
 			if (new_filename)
 				filename = new_filename;
@@ -1738,9 +1739,12 @@ static int get_oid_with_context_1(const char *name,
 			} else {
 				ret = get_tree_entry(&tree_oid, filename, oid,
 						     &oc->mode);
-				if (ret && only_to_die && diagnose_invalid_oid_path(prefix,
-					filename, &tree_oid, name, len, !!(flags & GET_OID_GENTLY)))
-					return -1;
+				if (ret && only_to_die) {
+					diagnose_invalid_oid_path(prefix,
+								   filename,
+								   &tree_oid,
+								   name, len, 0);
+				}
 			}
 			hashcpy(oc->tree, tree_oid.hash);
 			if (flags & GET_OID_RECORD_PATH)
@@ -1749,8 +1753,6 @@ static int get_oid_with_context_1(const char *name,
 			free(new_filename);
 			return ret;
 		} else {
-			if (flags & GET_OID_GENTLY)
-				return -1;
 			if (only_to_die)
 				die("Invalid object name '%.*s'.", len, name);
 		}
@@ -1774,10 +1776,9 @@ void maybe_die_on_misspelt_object_name(const char *name, const char *prefix)
 
 int get_oid_with_context(const char *str, unsigned flags, struct object_id *oid, struct object_context *oc)
 {
-	if (flags & GET_OID_FOLLOW_SYMLINKS && flags & GET_OID_ONLY_TO_DIE) {
-		if (flags & GET_OID_GENTLY)
-			return -1;
-		die("BUG: incompatible flags for get_sha1_with_context");
+	if (flags & (GET_OID_FOLLOW_SYMLINKS | GET_OID_GENTLY) &&
+		flags & GET_OID_ONLY_TO_DIE) {
+		die("BUG: incompatible flags");
 	}
 	return get_oid_with_context_1(str, flags, NULL, oid, oc);
 }
