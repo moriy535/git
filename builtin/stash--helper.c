@@ -730,38 +730,33 @@ static int show_stash(int argc, const char **argv, const char *prefix)
 	return diff_result_code(&rev.diffopt, 0);
 }
 
-static int do_store_stash(const char *w_commit, const char *stash_msg,
+static int do_store_stash(const struct object_id *w_commit, const char *stash_msg,
 			  int quiet)
 {
-	int ret = 0;
-	int need_to_free = 0;
-	struct object_id obj;
+	if (!stash_msg)
+		stash_msg = "Created via \"git stash store\".";
 
-	if (!stash_msg) {
-		need_to_free = 1;
-		stash_msg  = xstrdup("Created via \"git stash store\".");
+	if (update_ref(stash_msg, ref_stash, w_commit, NULL,
+		       REF_FORCE_CREATE_REFLOG,
+		       quiet ? UPDATE_REFS_QUIET_ON_ERR :
+		       UPDATE_REFS_MSG_ON_ERR)) {
+		if (!quiet) {
+			fprintf_ln(stderr, _("Cannot update %s with %s"),
+				   ref_stash, oid_to_hex(w_commit));
+		}
+		return -1;
 	}
 
-	ret = get_oid(w_commit, &obj);
-	if (!ret) {
-		ret = update_ref(stash_msg, ref_stash, &obj, NULL,
-				 REF_FORCE_CREATE_REFLOG,
-				 quiet ? UPDATE_REFS_QUIET_ON_ERR :
-				 UPDATE_REFS_MSG_ON_ERR);
-	}
-	if (ret && !quiet)
-		fprintf_ln(stderr, _("Cannot update %s with %s"),
-			   ref_stash, w_commit);
-	if (need_to_free)
-		free((char *) stash_msg);
-	return ret;
+	return 0;
 }
 
 static int store_stash(int argc, const char **argv, const char *prefix)
 {
 	const char *stash_msg = NULL;
+	struct object_id obj;
+	struct object_context dummy;
 	struct option options[] = {
-		OPT__QUIET(&quiet, N_("be quiet, only report errors")),
+		OPT__QUIET(&quiet, N_("be quiet")),
 		OPT_STRING('m', "message", &stash_msg, "message", N_("stash message")),
 		OPT_END()
 	};
@@ -771,11 +766,20 @@ static int store_stash(int argc, const char **argv, const char *prefix)
 			     PARSE_OPT_KEEP_UNKNOWN);
 
 	if (argc != 1) {
-		fprintf_ln(stderr, _("\"git stash store\" requires one <commit> argument"));
+		if (!quiet)
+			fprintf_ln(stderr, _("\"git stash store\" requires one <commit> argument"));
 		return -1;
 	}
 
-	return do_store_stash(argv[0], stash_msg, quiet);
+	if (get_oid_with_context(argv[0], quiet ? GET_OID_QUIETLY : 0, &obj,
+				 &dummy)) {
+		if (!quiet)
+			fprintf_ln(stderr, _("Cannot update %s with %s"),
+					     ref_stash, argv[0]);
+		return -1;
+	}
+
+	return do_store_stash(&obj, stash_msg, quiet);
 }
 
 int cmd_stash__helper(int argc, const char **argv, const char *prefix)
