@@ -1487,13 +1487,13 @@ static int save_stash(int argc, const char **argv, const char *prefix)
 	int include_untracked = 0;
 	int quiet = 0;
 	int ret = 0;
-	const char *stash_msg = NULL;
+	char *stash_msg = NULL;
 	char *to_free = NULL;
 	struct strbuf stash_msg_buf = STRBUF_INIT;
 	struct pathspec ps;
 	struct option options[] = {
-		OPT_SET_INT('k', "keep-index", &keep_index,
-			    N_("keep index"), 1),
+		OPT_BOOL('k', "keep-index", &keep_index,
+			 N_("keep index"), 1),
 		OPT_BOOL('p', "patch", &patch_mode,
 			 N_("stash in patch mode")),
 		OPT__QUIET(&quiet, N_("quiet mode")),
@@ -1511,7 +1511,7 @@ static int save_stash(int argc, const char **argv, const char *prefix)
 	for (i = 0; i < argc; ++i)
 		strbuf_addf(&stash_msg_buf, "%s ", argv[i]);
 	stash_msg = strbuf_detach(&stash_msg_buf, NULL);
-	to_free = (char *) stash_msg;
+	to_free = stash_msg;
 
 	memset(&ps, 0, sizeof(ps));
 	ret = do_push_stash(ps, stash_msg, quiet, keep_index, patch_mode,
