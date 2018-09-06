@@ -1492,12 +1492,11 @@ static int save_stash(int argc, const char **argv, const char *prefix)
 	int quiet = 0;
 	int ret = 0;
 	char *stash_msg = NULL;
-	char *to_free = NULL;
-	struct strbuf stash_msg_buf = STRBUF_INIT;
+	struct strbuf buf = STRBUF_INIT;
 	struct pathspec ps;
 	struct option options[] = {
 		OPT_BOOL('k', "keep-index", &keep_index,
-			 N_("keep index"), 1),
+			 N_("keep index")),
 		OPT_BOOL('p', "patch", &patch_mode,
 			 N_("stash in patch mode")),
 		OPT__QUIET(&quiet, N_("quiet mode")),
@@ -1505,23 +1504,23 @@ static int save_stash(int argc, const char **argv, const char *prefix)
 			 N_("include untracked files in stash")),
 		OPT_SET_INT('a', "all", &include_untracked,
 			    N_("include ignore files"), 2),
+		OPT_STRING('m', "message", &stash_msg, "message",
+			   N_("stash message")),
 		OPT_END()
 	};
 
 	argc = parse_options(argc, argv, prefix, options,
 			     git_stash_helper_save_usage,
-			     0);
+			     PARSE_OPT_KEEP_DASHDASH);
 
-	for (i = 0; i < argc; ++i)
-		strbuf_addf(&stash_msg_buf, "%s ", argv[i]);
-	stash_msg = strbuf_detach(&stash_msg_buf, NULL);
-	to_free = stash_msg;
+	if (argc)
+		stash_msg = (char*) strbuf_join_argv(&buf, argc, argv, ' ');
 
 	memset(&ps, 0, sizeof(ps));
 	ret = do_push_stash(ps, stash_msg, quiet, keep_index, patch_mode,
 			    include_untracked);
 
-	free(to_free);
+	strbuf_release(&buf);
 	return ret;
 }
 
