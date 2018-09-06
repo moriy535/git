@@ -1092,7 +1092,7 @@ done:
 
 static int do_create_stash(struct pathspec ps, char **stash_msg,
 			   int include_untracked, int patch_mode,
-			   struct stash_info *info)
+			   struct stash_info *info, struct strbuf *patch)
 {
 	int untracked_commit_option = 0;
 	int ret = 0;
@@ -1106,10 +1106,15 @@ static int do_create_stash(struct pathspec ps, char **stash_msg,
 	struct strbuf commit_tree_label = STRBUF_INIT;
 	struct strbuf out = STRBUF_INIT;
 	struct strbuf stash_msg_buf = STRBUF_INIT;
-	struct strbuf patch = STRBUF_INIT;
 
 	read_cache_preload(NULL);
 	refresh_cache(REFRESH_QUIET);
+
+	if (!check_changes(ps, include_untracked)) {
+		ret = 1;
+		*stash_msg = NULL;
+		goto done;
+	}
 
 	if (get_oid("HEAD", &info->b_commit)) {
 		fprintf_ln(stderr, _("You do not have the initial commit yet"));
@@ -1118,12 +1123,6 @@ static int do_create_stash(struct pathspec ps, char **stash_msg,
 		goto done;
 	} else {
 		head_commit = lookup_commit(the_repository, &info->b_commit);
-	}
-
-	if (!check_changes(ps, include_untracked)) {
-		ret = 1;
-		*stash_msg = NULL;
-		goto done;
 	}
 
 	branch_ref = resolve_ref_unsafe("HEAD", 0, NULL, &flags);
@@ -1156,7 +1155,7 @@ static int do_create_stash(struct pathspec ps, char **stash_msg,
 		untracked_commit_option = 1;
 	}
 	if (patch_mode) {
-		ret = stash_patch(info, ps, &patch);
+		ret = stash_patch(info, ps, patch);
 		*stash_msg = NULL;
 		if (ret < 0) {
 			fprintf_ln(stderr, _("Cannot save the current worktree state"));
@@ -1225,7 +1224,8 @@ static int create_stash(int argc, const char **argv, const char *prefix)
 			     0);
 
 	memset(&ps, 0, sizeof(ps));
-	ret = do_create_stash(ps, &stash_msg, include_untracked, 0, &info);
+	ret = do_create_stash(ps, &stash_msg, include_untracked, 0, &info,
+			      NULL);
 
 	if (!ret)
 		printf_ln("%s", oid_to_hex(&info.w_commit));
@@ -1238,24 +1238,21 @@ static int create_stash(int argc, const char **argv, const char *prefix)
 	return ret < 0;
 }
 
-static void add_ps_items_to_argv_array(struct argv_array *args,
-				       struct pathspec ps) {
-	int i;
-	for (i = 0; i < ps.nr; ++i)
-		argv_array_push(args, ps.items[i].match);
-}
-
-static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
+static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 			 int keep_index, int patch_mode, int include_untracked)
 {
 	int ret = 0;
 	struct stash_info info;
+	struct strbuf patch = STRBUF_INIT;
+
 	if (patch_mode && keep_index == -1)
 		keep_index = 1;
 
 	if (patch_mode && include_untracked) {
-		fprintf_ln(stderr, _("Can't use --patch and --include-untracked or --all at the same time"));
-		return -1;
+		fprintf_ln(stderr, _("Can't use --patch and --include-untracked"
+				     " or --all at the same time"));
+		ret = -1;
+		goto done;
 	}
 
 	read_cache_preload(NULL);
@@ -1263,40 +1260,43 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 		int i;
 		char *ps_matched = xcalloc(ps.nr, 1);
 
-		for (i = 0; i < active_nr; ++i) {
-			const struct cache_entry *ce = active_cache[i];
-			ce_path_match(&the_index, ce, &ps, ps_matched);
-		}
+		for (i = 0; i < active_nr; i++)
+			ce_path_match(&the_index, active_cache[i], &ps,
+				      ps_matched);
 
 		if (report_path_error(ps_matched, &ps, NULL)) {
 			fprintf_ln(stderr, _("Did you forget to 'git add'?"));
-			return -1;
+			ret = -1;
+			goto done;
 		}
 		free(ps_matched);
 	}
 
-	if (refresh_cache(REFRESH_QUIET))
-		return -1;
-
-	if (!check_changes(ps, include_untracked)) {
-		printf_ln(_("No local changes to save"));
-		return 0;
-	}
-
-	if (!reflog_exists(ref_stash) && do_clear_stash()) {
-		fprintf_ln(stderr, _("Cannot initialize stash"));
-		return -1;
-	}
-
-	if (do_create_stash(ps, &stash_msg, include_untracked, patch_mode,
-			    &info)) {
+	if (refresh_cache(REFRESH_QUIET)) {
 		ret = -1;
 		goto done;
 	}
 
-	if (do_store_stash(oid_to_hex(&info.w_commit), stash_msg, 1)) {
-		fprintf(stderr, _("Cannot save the current status"));
+	if (!check_changes(ps, include_untracked)) {
+		printf_ln(_("No local changes to save"));
+		goto done;
+	}
+
+	if (!reflog_exists(ref_stash) && do_clear_stash()) {
 		ret = -1;
+		fprintf_ln(stderr, _("Cannot initialize stash"));
+		goto done;
+	}
+
+	if (do_create_stash(ps, &stash_msg, include_untracked, patch_mode,
+			    &info, &patch)) {
+		ret = -1;
+		goto done;
+	}
+
+	if (do_store_stash(&info.w_commit, stash_msg, 1)) {
+		ret = -1;
+		fprintf_ln(stderr, _("Cannot save the current status"));
 		goto done;
 	}
 
@@ -1309,7 +1309,7 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 			cp.git_cmd = 1;
 			argv_array_pushl(&cp.args, "clean", "--force",
 					 "--quiet", "-d", NULL);
-			if (include_untracked == 2)
+			if (include_untracked == INCLUDE_ALL_FILES)
 				argv_array_push(&cp.args, "-x");
 			if (run_command(&cp)) {
 				ret = -1;
@@ -1326,10 +1326,10 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 			argv_array_push(&cp1.args, "add");
 			if (!include_untracked)
 				argv_array_push(&cp1.args, "-u");
-			if (include_untracked == 2)
+			if (include_untracked == INCLUDE_ALL_FILES)
 				argv_array_push(&cp1.args, "--force");
 			argv_array_push(&cp1.args, "--");
-			add_ps_items_to_argv_array(&cp1.args, ps);
+			add_pathspecs(&cp1.args, ps);
 			if (run_command(&cp1)) {
 				ret = -1;
 				goto done;
@@ -1339,7 +1339,7 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 			argv_array_pushl(&cp2.args, "diff-index", "-p",
 					 "--cached", "--binary", "HEAD", "--",
 					 NULL);
-			add_ps_items_to_argv_array(&cp2.args, ps);
+			add_pathspecs(&cp2.args, ps);
 			if (pipe_command(&cp2, NULL, 0, &out, 0, NULL, 0)) {
 				ret = -1;
 				goto done;
@@ -1377,7 +1377,7 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 			cp1.git_cmd = 1;
 			argv_array_pushl(&cp1.args, "ls-files", "-z",
 					 "--modified", "--", NULL);
-			add_ps_items_to_argv_array(&cp1.args, ps);
+			add_pathspecs(&cp1.args, ps);
 			if (pipe_command(&cp1, NULL, 0, &out, 0, NULL, 0)) {
 				ret = -1;
 				goto done;
@@ -1392,6 +1392,7 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 				goto done;
 			}
 		}
+		goto done;
 	} else {
 		struct child_process cp = CHILD_PROCESS_INIT;
 
@@ -1410,14 +1411,15 @@ static int do_push_stash(struct pathspec ps, const char *stash_msg, int quiet,
 
 			cp.git_cmd = 1;
 			argv_array_pushl(&cp.args, "reset", "-q", "--", NULL);
-			for (i = 0; i < ps.nr; ++i)
-				argv_array_push(&cp.args, ps.items[i].match);
+			add_pathspecs(&cp.args, ps);
 			if (run_command(&cp)) {
 				ret = -1;
 				goto done;
 			}
 		}
+		goto done;
 	}
+
 done:
 	free((char *) stash_msg);
 	return ret;
@@ -1429,11 +1431,11 @@ static int push_stash(int argc, const char **argv, const char *prefix)
 	int patch_mode = 0;
 	int include_untracked = 0;
 	int quiet = 0;
-	const char *stash_msg = NULL;
+	char *stash_msg = NULL;
 	struct pathspec ps;
 	struct option options[] = {
-		OPT_SET_INT('k', "keep-index", &keep_index,
-			    N_("keep index"), 1),
+		OPT_BOOL('k', "keep-index", &keep_index,
+			 N_("keep index")),
 		OPT_BOOL('p', "patch", &patch_mode,
 			 N_("stash in patch mode")),
 		OPT__QUIET(&quiet, N_("quiet mode")),
