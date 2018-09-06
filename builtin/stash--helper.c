@@ -14,6 +14,8 @@
 #include "log-tree.h"
 #include "diffcore.h"
 
+#define INCLUDE_ALL_FILES 2
+
 static const char * const git_stash_helper_usage[] = {
 	N_("git stash--helper list [<options>]"),
 	N_("git stash--helper show [<options>] [<stash>]"),
@@ -302,8 +304,13 @@ static void add_diff_to_buf(struct diff_queue_struct *q,
 {
 	int i;
 	for (i = 0; i < q->nr; i++) {
-		struct diff_filepair *p = q->queue[i];
-		strbuf_addstr(data, p->one->path);
+		strbuf_addstr(data, q->queue[i]->one->path);
+
+		/*
+		 * The reason we add "0" at the end of this strbuf
+		 * is because we will pass the output further to
+		 * "git update-index -z ...".
+		 */
 		strbuf_addch(data, 0);
 	}
 }
@@ -800,6 +807,14 @@ static int store_stash(int argc, const char **argv, const char *prefix)
 	return do_store_stash(&obj, stash_msg, quiet);
 }
 
+static void add_pathspecs(struct argv_array *args,
+				       struct pathspec ps) {
+	int i;
+
+	for (i = 0; i < ps.nr; i++)
+		argv_array_push(args, ps.items[i].match);
+}
+
 /*
  * `out` will be filled with the names of untracked files. The return value is:
  *
@@ -811,11 +826,12 @@ static int get_untracked_files(struct pathspec ps, int include_untracked,
 {
 	int max_len;
 	int i;
+	int found = 0;
 	char *seen;
 	struct dir_struct dir;
 
 	memset(&dir, 0, sizeof(dir));
-	if (include_untracked != 2)
+	if (include_untracked != INCLUDE_ALL_FILES)
 		setup_standard_excludes(&dir);
 
 	seen = xcalloc(ps.nr, 1);
@@ -823,11 +839,12 @@ static int get_untracked_files(struct pathspec ps, int include_untracked,
 	max_len = fill_directory(&dir, the_repository->index, &ps);
 	for (i = 0; i < dir.nr; i++) {
 		struct dir_entry *ent = dir.entries[i];
-		if (!dir_path_match(&the_index, ent, &ps, max_len, seen)) {
-			free(ent);
-			continue;
+		if (dir_path_match(&the_index, ent, &ps, max_len, seen)) {
+			++found;
+			strbuf_addstr(out, ent->name);
+			/* NUL-terminate: will be fed to update-index -z */
+			strbuf_addch(out, 0);
 		}
-		strbuf_addf(out, "%s%c", ent->name, '\0');
 		free(ent);
 	}
 
@@ -835,7 +852,7 @@ static int get_untracked_files(struct pathspec ps, int include_untracked,
 	free(dir.ignored);
 	clear_directory(&dir);
 	free(seen);
-	return out->len;
+	return found;
 }
 
 /*
@@ -932,9 +949,8 @@ done:
 	return ret;
 }
 
-static struct strbuf patch = STRBUF_INIT;
-
-static int stash_patch(struct stash_info *info, struct pathspec ps)
+static int stash_patch(struct stash_info *info, struct pathspec ps,
+		       struct strbuf *out_patch)
 {
 	int i;
 	int ret = 0;
@@ -955,11 +971,11 @@ static int stash_patch(struct stash_info *info, struct pathspec ps)
 		goto done;
 	}
 
+	/* Find out what the user wants. */
 	cp_add_i.git_cmd = 1;
 	argv_array_pushl(&cp_add_i.args, "add--interactive", "--patch=stash",
 			 "--", NULL);
-	for (i = 0; i < ps.nr; ++i)
-		argv_array_push(&cp_add_i.args, ps.items[i].match);
+	add_pathspecs(&cp_add_i.args, ps);
 	argv_array_pushf(&cp_add_i.env_array, "GIT_INDEX_FILE=%s",
 			 stash_index_path.buf);
 	if (run_command(&cp_add_i)) {
@@ -967,6 +983,7 @@ static int stash_patch(struct stash_info *info, struct pathspec ps)
 		goto done;
 	}
 
+	/* State of the working tree. */
 	cp_write_tree.git_cmd = 1;
 	argv_array_push(&cp_write_tree.args, "write-tree");
 	argv_array_pushf(&cp_write_tree.env_array, "GIT_INDEX_FILE=%s",
@@ -981,12 +998,12 @@ static int stash_patch(struct stash_info *info, struct pathspec ps)
 	cp_diff_tree.git_cmd = 1;
 	argv_array_pushl(&cp_diff_tree.args, "diff-tree", "-p", "HEAD",
 			 oid_to_hex(&info->w_tree), "--", NULL);
-	if (pipe_command(&cp_diff_tree, NULL, 0, &patch, 0, NULL, 0)) {
+	if (pipe_command(&cp_diff_tree, NULL, 0, out_patch, 0, NULL, 0)) {
 		ret = -1;
 		goto done;
 	}
 
-	if (!patch.len) {
+	if (!out_patch->len) {
 		fprintf_ln(stderr, _("No changes selected"));
 		ret = 1;
 	}
@@ -1063,7 +1080,7 @@ done:
 	return ret;
 }
 
-static int do_create_stash(struct pathspec ps, const char **stash_msg,
+static int do_create_stash(struct pathspec ps, char **stash_msg,
 			   int include_untracked, int patch_mode,
 			   struct stash_info *info)
 {
@@ -1079,15 +1096,10 @@ static int do_create_stash(struct pathspec ps, const char **stash_msg,
 	struct strbuf commit_tree_label = STRBUF_INIT;
 	struct strbuf out = STRBUF_INIT;
 	struct strbuf stash_msg_buf = STRBUF_INIT;
+	struct strbuf patch = STRBUF_INIT;
 
 	read_cache_preload(NULL);
 	refresh_cache(REFRESH_QUIET);
-
-	if (!check_changes(ps, include_untracked)) {
-		ret = 1;
-		*stash_msg = NULL;
-		goto done;
-	}
 
 	if (get_oid("HEAD", &info->b_commit)) {
 		fprintf_ln(stderr, _("You do not have the initial commit yet"));
@@ -1096,6 +1108,12 @@ static int do_create_stash(struct pathspec ps, const char **stash_msg,
 		goto done;
 	} else {
 		head_commit = lookup_commit(the_repository, &info->b_commit);
+	}
+
+	if (!check_changes(ps, include_untracked)) {
+		ret = 1;
+		*stash_msg = NULL;
+		goto done;
 	}
 
 	branch_ref = resolve_ref_unsafe("HEAD", 0, NULL, &flags);
@@ -1128,7 +1146,7 @@ static int do_create_stash(struct pathspec ps, const char **stash_msg,
 		untracked_commit_option = 1;
 	}
 	if (patch_mode) {
-		ret = stash_patch(info, ps);
+		ret = stash_patch(info, ps, &patch);
 		*stash_msg = NULL;
 		if (ret < 0) {
 			fprintf_ln(stderr, _("Cannot save the current worktree state"));
@@ -1181,7 +1199,7 @@ static int create_stash(int argc, const char **argv, const char *prefix)
 {
 	int include_untracked = 0;
 	int ret = 0;
-	const char *stash_msg = NULL;
+	char *stash_msg = NULL;
 	struct stash_info info;
 	struct pathspec ps;
 	struct option options[] = {
