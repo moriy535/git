@@ -840,9 +840,7 @@ static void add_pathspecs(struct argv_array *args,
  * = 0 if there are not any untracked files
  * > 0 if there are untracked files
  */
-static struct strbuf untracked_files = STRBUF_INIT;
-
-static int get_untracked_files(struct pathspec ps, int include_untracked)
+static int get_untracked_files(struct pathspec ps, int include_untracked, struct strbuf *untracked_files)
 {
 	int max_len;
 	int i;
@@ -861,9 +859,9 @@ static int get_untracked_files(struct pathspec ps, int include_untracked)
 		struct dir_entry *ent = dir.entries[i];
 		if (dir_path_match(&the_index, ent, &ps, max_len, seen)) {
 			++found;
-			strbuf_addstr(&untracked_files, ent->name);
+			strbuf_addstr(untracked_files, ent->name);
 			/* NUL-terminate: will be fed to update-index -z */
-			strbuf_addch(&untracked_files, 0);
+			strbuf_addch(untracked_files, 0);
 		}
 		free(ent);
 	}
@@ -917,19 +915,19 @@ static int check_changes_tracked_files(struct pathspec ps)
 	return 0;
 }
 
-static int check_changes(struct pathspec ps, int include_untracked)
+static int check_changes(struct pathspec ps, int include_untracked, struct strbuf *untracked_files)
 {
 	int ret = 0;
 	if (check_changes_tracked_files(ps))
 		ret = 1;
 
-	if (include_untracked && get_untracked_files(ps, include_untracked))
+	if (include_untracked && get_untracked_files(ps, include_untracked, untracked_files))
 		ret = 1;
 
 	return ret;
 }
 
-static int save_untracked_files(struct stash_info *info, struct strbuf *msg)
+static int save_untracked_files(struct stash_info *info, struct strbuf *msg, struct strbuf untracked_files)
 {
 	int ret = 0;
 	struct strbuf untracked_msg = STRBUF_INIT;
@@ -1121,11 +1119,12 @@ static int do_create_stash(struct pathspec ps, char **stash_msg,
 	struct strbuf msg = STRBUF_INIT;
 	struct strbuf commit_tree_label = STRBUF_INIT;
 	struct strbuf stash_msg_buf = STRBUF_INIT;
+	struct strbuf untracked_files = STRBUF_INIT;
 
 	read_cache_preload(NULL);
 	refresh_cache(REFRESH_QUIET);
 
-	if (!check_changes(ps, include_untracked)) {
+	if (!check_changes(ps, include_untracked, &untracked_files)) {
 		ret = 1;
 		*stash_msg = NULL;
 		goto done;
@@ -1162,7 +1161,7 @@ static int do_create_stash(struct pathspec ps, char **stash_msg,
 	}
 
 	if (include_untracked) {
-		if (save_untracked_files(info, &msg)) {
+		if (save_untracked_files(info, &msg, untracked_files)) {
 			if (!quiet)
 				fprintf_ln(stderr, _("Cannot save the untracked files"));
 			ret = -1;
@@ -1252,6 +1251,7 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 	int ret = 0;
 	struct stash_info info;
 	struct strbuf patch = STRBUF_INIT;
+	struct strbuf untracked_files = STRBUF_INIT;
 
 	if (patch_mode && keep_index == -1)
 		keep_index = 1;
@@ -1287,7 +1287,7 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 		goto done;
 	}
 
-	if (!check_changes(ps, include_untracked)) {
+	if (!check_changes(ps, include_untracked, &untracked_files)) {
 		stash_msg = NULL;
 		if (!quiet)
 			printf_ln(_("No local changes to save"));
