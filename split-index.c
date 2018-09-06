@@ -220,8 +220,18 @@ void prepare_to_write_split_index(struct index_state *istate)
 			}
 			ce->ce_flags |= CE_MATCHED; /* or "shared" */
 			base = si->base->cache[ce->index - 1];
-			if (ce == base)
+			if (ce == base) {
+				/*
+				 * Racily clean cache entries must be
+				 * written to the split index, so the
+				 * subsequent do_write_index() can smudge
+				 * their stat data.
+				 */
+				if (!ce_uptodate(ce) &&
+				    is_racy_timestamp(istate, ce))
+					ce->ce_flags |= CE_UPDATE_IN_BASE;
 				continue;
+			}
 			if (ce->ce_namelen != base->ce_namelen ||
 			    strcmp(ce->name, base->name)) {
 				ce->index = 0;

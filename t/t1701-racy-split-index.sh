@@ -77,7 +77,7 @@ done
 
 for trial in 0 1 2 3 4
 do
-	test_expect_failure "update the split index when the shared index contains a racily clean cache entry #$trial" '
+	test_expect_success "update the split index when the shared index contains a racily clean cache entry #$trial" '
 		test_when_finished "rm -f .git/index .git/sharedindex.*" &&
 
 		# The next three commands must be run within the same
@@ -100,8 +100,6 @@ do
 		# corresponding replacement cache entry with smudged
 		# stat data should be added to the new split index, so
 		# the file wont appear clean for subsequent git commands.
-		#
-		# Alas, such a smudged replacement entry is not added!
 		git update-index --add other-file &&
 
 		check_cached_diff
