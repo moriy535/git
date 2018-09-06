@@ -1282,6 +1282,7 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 
 		if (report_path_error(ps_matched, &ps, NULL)) {
 			fprintf_ln(stderr, _("Did you forget to 'git add'?"));
+			stash_msg = NULL;
 			ret = -1;
 			goto done;
 		}
@@ -1289,17 +1290,20 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 	}
 
 	if (refresh_cache(REFRESH_QUIET)) {
+		stash_msg = NULL;
 		ret = -1;
 		goto done;
 	}
 
 	if (!check_changes(ps, include_untracked)) {
+		stash_msg = NULL;
 		if (!quiet)
 			printf_ln(_("No local changes to save"));
 		goto done;
 	}
 
 	if (!reflog_exists(ref_stash) && do_clear_stash()) {
+		stash_msg = NULL;
 		ret = -1;
 		if (!quiet)
 			fprintf_ln(stderr, _("Cannot initialize stash"));
@@ -1443,7 +1447,7 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 	}
 
 done:
-	free((char *) stash_msg);
+	free(stash_msg);
 	return ret;
 }
 
