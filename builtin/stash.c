@@ -1224,23 +1224,13 @@ static int create_stash(int argc, const char **argv, const char *prefix)
 {
 	int i;
 	int ret = 0;
-	char *to_free = NULL;
 	char *stash_msg = NULL;
 	struct stash_info info;
 	struct pathspec ps;
 	struct strbuf stash_msg_buf = STRBUF_INIT;
-	struct option options[] = {
-		OPT_END()
-	};
 
-	argc = parse_options(argc, argv, prefix, options,
-			     git_stash_create_usage,
-			     0);
-
-	for (i = 0; i < argc; ++i)
-		strbuf_addf(&stash_msg_buf, "%s ", argv[i]);
-	stash_msg = strbuf_detach(&stash_msg_buf, NULL);
-	to_free = stash_msg;
+	/* We need to start with the argv[1], since argv[0] is "create" */
+	stash_msg = (char*) strbuf_join_argv(&stash_msg_buf, argc - 1, ++argv, ' ');
 
 	memset(&ps, 0, sizeof(ps));
 	ret = do_create_stash(ps, &stash_msg, 0, 0, &info, NULL, 0);
@@ -1248,8 +1238,7 @@ static int create_stash(int argc, const char **argv, const char *prefix)
 	if (!ret)
 		printf_ln("%s", oid_to_hex(&info.w_commit));
 
-	free(to_free);
-	free(stash_msg);
+	strbuf_release(&stash_msg_buf);
 
 	/*
 	 * ret can be 1 if there were no changes. In this case, we should
