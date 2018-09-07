@@ -969,7 +969,6 @@ done:
 static int stash_patch(struct stash_info *info, struct pathspec ps,
 		       struct strbuf *out_patch, int quiet)
 {
-	int i;
 	int ret = 0;
 	struct child_process cp_read_tree = CHILD_PROCESS_INIT;
 	struct child_process cp_add_i = CHILD_PROCESS_INIT;
@@ -1207,7 +1206,6 @@ done:
 
 static int create_stash(int argc, const char **argv, const char *prefix)
 {
-	int i;
 	int ret = 0;
 	char *stash_msg = NULL;
 	struct stash_info info;
@@ -1407,7 +1405,6 @@ static int do_push_stash(struct pathspec ps, char *stash_msg, int quiet,
 		}
 
 		if (keep_index < 1) {
-			int i;
 			struct child_process cp = CHILD_PROCESS_INIT;
 
 			cp.git_cmd = 1;
@@ -1461,7 +1458,6 @@ static int push_stash(int argc, const char **argv, const char *prefix)
 
 static int save_stash(int argc, const char **argv, const char *prefix)
 {
-	int i;
 	int keep_index = -1;
 	int patch_mode = 0;
 	int include_untracked = 0;
